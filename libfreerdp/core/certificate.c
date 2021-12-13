@@ -348,14 +348,15 @@ static rdpX509CertChain* certificate_new_x509_certificate_chain(UINT32 count)
 
 static void certificate_free_x509_certificate_chain(rdpX509CertChain* x509_cert_chain)
 {
-	int i;
+	UINT32 i;
 
 	if (!x509_cert_chain)
 		return;
 
-	for (i = 0; i < (int)x509_cert_chain->count; i++)
+	for (i = 0; i < x509_cert_chain->count; i++)
 	{
-		free(x509_cert_chain->array[i].data);
+		struct rdp_CertBlob* element = &x509_cert_chain->array[i];
+		free(element->data);
 	}
 
 	free(x509_cert_chain->array);
@@ -369,6 +370,7 @@ static BOOL certificate_process_server_public_key(rdpCertificate* certificate, w
 	UINT32 keylen;
 	UINT32 bitlen;
 	UINT32 datalen;
+	BYTE* tmp;
 
 	if (Stream_GetRemainingLength(s) < 20)
 		return FALSE;
@@ -390,10 +392,11 @@ static BOOL certificate_process_server_public_key(rdpCertificate* certificate, w
 		return FALSE;
 
 	certificate->cert_info.ModulusLength = keylen - 8;
-	certificate->cert_info.Modulus = malloc(certificate->cert_info.ModulusLength);
+	tmp = realloc(certificate->cert_info.Modulus, certificate->cert_info.ModulusLength);
 
-	if (!certificate->cert_info.Modulus)
+	if (!tmp)
 		return FALSE;
+	certificate->cert_info.Modulus = tmp;
 
 	Stream_Read(s, certificate->cert_info.Modulus, certificate->cert_info.ModulusLength);
 	Stream_Seek(s, 8); /* 8 bytes of zero padding */
@@ -666,13 +669,12 @@ BOOL certificate_read_server_certificate(rdpCertificate* certificate, const BYTE
                                          size_t length)
 {
 	BOOL ret;
-	wStream* s;
+	wStream* s, sbuffer;
 	UINT32 dwVersion;
 
 	if (length < 4) /* NULL certificate is not an error see #1795 */
 		return TRUE;
-
-	s = Stream_New((BYTE*)server_cert, length);
+	s = Stream_StaticConstInit(&sbuffer, server_cert, length);
 
 	if (!s)
 	{
@@ -699,7 +701,6 @@ BOOL certificate_read_server_certificate(rdpCertificate* certificate, const BYTE
 			break;
 	}
 
-	Stream_Free(s, FALSE);
 	return ret;
 }
 

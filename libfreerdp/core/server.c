@@ -551,6 +551,8 @@ BOOL WTSVirtualChannelManagerCheckFileDescriptorEx(HANDLE hServer, BOOL autoOpen
 		buffer = (BYTE*)message.wParam;
 		length = (UINT32)(UINT_PTR)message.lParam;
 
+		WINPR_ASSERT(vcm->client);
+		WINPR_ASSERT(vcm->client->SendChannelData);
 		if (!vcm->client->SendChannelData(vcm->client, channelId, buffer, length))
 		{
 			status = FALSE;
@@ -848,6 +850,14 @@ static void wts_virtual_channel_manager_free_message(void* obj)
 	}
 }
 
+static void channel_free(rdpPeerChannel* channel);
+
+static void array_channel_free(void* ptr)
+{
+	rdpPeerChannel* channel = ptr;
+	channel_free(channel);
+}
+
 HANDLE WINAPI FreeRDP_WTSOpenServerA(LPSTR pServerName)
 {
 	rdpContext* context;
@@ -901,6 +911,11 @@ HANDLE WINAPI FreeRDP_WTSOpenServerA(LPSTR pServerName)
 	if (!vcm->dynamicVirtualChannels)
 		goto error_dynamicVirtualChannels;
 
+	{
+		wObject* obj = ArrayList_Object(vcm->dynamicVirtualChannels);
+		WINPR_ASSERT(obj);
+		obj->fnObjectFree = array_channel_free;
+	}
 	client->ReceiveChannelData = WTSReceiveChannelData;
 	hServer = (HANDLE)vcm;
 	return hServer;
@@ -927,25 +942,13 @@ HANDLE WINAPI FreeRDP_WTSOpenServerExA(LPSTR pServerName)
 
 VOID WINAPI FreeRDP_WTSCloseServer(HANDLE hServer)
 {
-	int index;
-	int count;
-	rdpPeerChannel* channel;
 	WTSVirtualChannelManager* vcm;
 	vcm = (WTSVirtualChannelManager*)hServer;
 
-	if (vcm)
+	if (vcm && (vcm != INVALID_HANDLE_VALUE))
 	{
 		HashTable_Remove(g_ServerHandles, (void*)(UINT_PTR)vcm->SessionId);
-		ArrayList_Lock(vcm->dynamicVirtualChannels);
-		count = ArrayList_Count(vcm->dynamicVirtualChannels);
 
-		for (index = 0; index < count; index++)
-		{
-			channel = (rdpPeerChannel*)ArrayList_GetItem(vcm->dynamicVirtualChannels, index);
-			WTSVirtualChannelClose(channel);
-		}
-
-		ArrayList_Unlock(vcm->dynamicVirtualChannels);
 		ArrayList_Free(vcm->dynamicVirtualChannels);
 
 		if (vcm->drdynvc_channel)
@@ -1110,7 +1113,7 @@ static void peer_channel_queue_free_message(void* obj)
 	free(msg->context);
 }
 
-static void channel_free(rdpPeerChannel* channel)
+void channel_free(rdpPeerChannel* channel)
 {
 	if (!channel)
 		return;
@@ -1143,6 +1146,7 @@ static rdpPeerChannel* channel_new(WTSVirtualChannelManager* vcm, freerdp_peer* 
 		goto fail;
 
 	queueCallbacks.fnObjectFree = peer_channel_queue_free_message;
+
 	channel->queue = MessageQueue_New(&queueCallbacks);
 
 	if (!channel->queue)
@@ -1161,7 +1165,7 @@ HANDLE WINAPI FreeRDP_WTSVirtualChannelOpen(HANDLE hServer, DWORD SessionId, LPS
 	rdpMcs* mcs;
 	rdpMcsChannel* joined_channel = NULL;
 	freerdp_peer* client;
-	rdpPeerChannel* channel;
+	rdpPeerChannel* channel = NULL;
 	WTSVirtualChannelManager* vcm;
 	HANDLE hChannelHandle = NULL;
 	vcm = (WTSVirtualChannelManager*)hServer;
@@ -1287,22 +1291,23 @@ HANDLE WINAPI FreeRDP_WTSVirtualChannelOpenEx(DWORD SessionId, LPSTR pVirtualNam
 	s = Stream_New(NULL, 64);
 
 	if (!s)
-		goto fail;
+		goto fail2;
 
 	if (!wts_write_drdynvc_create_request(s, channel->channelId, pVirtualName))
-		goto fail;
+		goto fail2;
 
 	if (!WTSVirtualChannelWrite(vcm->drdynvc_channel, (PCHAR)Stream_Buffer(s),
 	                            Stream_GetPosition(s), &written))
-		goto fail;
+		goto fail2;
 
 	Stream_Free(s, TRUE);
 	return channel;
 fail:
-	Stream_Free(s, TRUE);
-	if (vcm)
-		ArrayList_Remove(vcm->dynamicVirtualChannels, channel);
 	channel_free(channel);
+fail2:
+	Stream_Free(s, TRUE);
+	ArrayList_Remove(vcm->dynamicVirtualChannels, channel);
+
 	SetLastError(ERROR_NOT_ENOUGH_MEMORY);
 	return NULL;
 }
@@ -1330,13 +1335,14 @@ BOOL WINAPI FreeRDP_WTSVirtualChannelClose(HANDLE hChannelHandle)
 			if (channel->index < mcs->channelCount)
 			{
 				rdpMcsChannel* cur = &mcs->channels[channel->index];
+				rdpPeerChannel* peerChannel = (rdpPeerChannel*)cur->handle;
+				if (peerChannel)
+					channel_free(peerChannel);
 				cur->handle = NULL;
 			}
 		}
 		else
 		{
-			ArrayList_Remove(vcm->dynamicVirtualChannels, channel);
-
 			if (channel->dvc_open_state == DVC_OPEN_STATE_SUCCEEDED)
 			{
 				ULONG written;
@@ -1355,18 +1361,8 @@ BOOL WINAPI FreeRDP_WTSVirtualChannelClose(HANDLE hChannelHandle)
 					Stream_Free(s, TRUE);
 				}
 			}
+			ArrayList_Remove(vcm->dynamicVirtualChannels, channel);
 		}
-
-		if (channel->receiveData)
-			Stream_Free(channel->receiveData, TRUE);
-
-		if (channel->queue)
-		{
-			MessageQueue_Free(channel->queue);
-			channel->queue = NULL;
-		}
-
-		free(channel);
 	}
 
 	return ret;

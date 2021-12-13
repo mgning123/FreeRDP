@@ -45,7 +45,10 @@
 #include <winpr/wlog.h>
 #include <winpr/debug.h>
 
+#ifndef MIN
 #define MIN(a, b) (a) < (b) ? (a) : (b)
+#endif
+
 #define TAG "com.winpr.utils.debug"
 #define LOGT(...)                                           \
 	do                                                      \
@@ -260,10 +263,7 @@ USHORT RtlCaptureStackBackTrace(ULONG FramesToSkip, ULONG FramesToCapture, PVOID
 void winpr_backtrace_free(void* buffer)
 {
 	if (!buffer)
-	{
-		LOGF(support_msg);
 		return;
-	}
 
 #if defined(HAVE_EXECINFO_H)
 	t_execinfo* data = (t_execinfo*)buffer;
@@ -517,8 +517,7 @@ void winpr_log_backtrace_ex(wLog* log, DWORD level, DWORD size)
 	if (!stack)
 	{
 		WLog_Print(log, WLOG_ERROR, "winpr_backtrace failed!\n");
-		winpr_backtrace_free(stack);
-		return;
+		goto fail;
 	}
 
 	msg = winpr_backtrace_symbols(stack, &used);
@@ -530,6 +529,7 @@ void winpr_log_backtrace_ex(wLog* log, DWORD level, DWORD size)
 	}
 	free(msg);
 
+fail:
 	winpr_backtrace_free(stack);
 }
 

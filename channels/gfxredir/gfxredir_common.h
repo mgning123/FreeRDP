@@ -1,10 +1,8 @@
 /**
  * FreeRDP: A Remote Desktop Protocol Implementation
- * FreeRDP Proxy Server
+ * RDPXXXX Remote App Graphics Redirection Virtual Channel Extension
  *
- * Copyright 2019 Mati Shabtay <matishabtay@gmail.com>
- * Copyright 2019 Kobi Mizrachi <kmizrachi18@gmail.com>
- * Copyright 2019 Idan Freiberg <speidy@gmail.com>
+ * Copyright 2020 Microsoft
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,13 +17,16 @@
  * limitations under the License.
  */
 
-#ifndef FREERDP_SERVER_PROXY_PFGRAPHICS_H
-#define FREERDP_SERVER_PROXY_PFGRAPHICS_H
+#ifndef FREERDP_CHANNEL_GFXREDIR_COMMON_H
+#define FREERDP_CHANNEL_GFXREDIR_COMMON_H
 
-#include <freerdp/freerdp.h>
-#include "pf_client.h"
+#include <winpr/crt.h>
+#include <winpr/stream.h>
 
-BOOL pf_register_pointer(rdpGraphics* graphics);
-BOOL pf_register_graphics(rdpGraphics* graphics);
+#include <freerdp/channels/gfxredir.h>
+#include <freerdp/api.h>
 
-#endif /* FREERDP_SERVER_PROXY_PFGRAPHICS_H */
+FREERDP_LOCAL UINT gfxredir_read_header(wStream* s, GFXREDIR_HEADER* header);
+FREERDP_LOCAL UINT gfxredir_write_header(wStream* s, const GFXREDIR_HEADER* header);
+
+#endif /* FREERDP_CHANNEL_GFXREDIR_COMMON_H */

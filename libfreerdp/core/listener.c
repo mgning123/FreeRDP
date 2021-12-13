@@ -230,11 +230,12 @@ static BOOL freerdp_listener_open_from_socket(freerdp_listener* instance, int fd
 		return FALSE;
 
 	listener->sockfds[listener->num_sockfds] = fd;
-	listener->events[listener->num_sockfds] =
-	    CreateFileDescriptorEvent(NULL, FALSE, FALSE, fd, WINPR_FD_READ);
+	listener->events[listener->num_sockfds] = WSACreateEvent();
 
 	if (!listener->events[listener->num_sockfds])
 		return FALSE;
+
+	WSAEventSelect(fd, listener->events[listener->num_sockfds], FD_READ | FD_ACCEPT | FD_CLOSE);
 
 	listener->num_sockfds++;
 	WLog_INFO(TAG, "Listening on socket %d.", fd);
@@ -306,21 +307,25 @@ BOOL freerdp_peer_set_local_and_hostname(freerdp_peer* client,
 
 	if (peer_addr->ss_family == AF_INET)
 	{
-		sin_addr = &(((struct sockaddr_in*)&peer_addr)->sin_addr);
+		sin_addr = &(((struct sockaddr_in*)peer_addr)->sin_addr);
 
 		if ((*(UINT32*)sin_addr) == 0x0100007f)
 			client->local = TRUE;
 	}
 	else if (peer_addr->ss_family == AF_INET6)
 	{
-		sin_addr = &(((struct sockaddr_in6*)&peer_addr)->sin6_addr);
+		sin_addr = &(((struct sockaddr_in6*)peer_addr)->sin6_addr);
 
 		if (memcmp(sin_addr, localhost6_bytes, 16) == 0)
 			client->local = TRUE;
 	}
 
 #ifndef _WIN32
+#ifdef AF_VSOCK
+	else if (peer_addr->ss_family == AF_UNIX || peer_addr->ss_family == AF_VSOCK)
+#else
 	else if (peer_addr->ss_family == AF_UNIX)
+#endif
 		client->local = TRUE;
 #endif
 
@@ -352,6 +357,7 @@ static BOOL freerdp_listener_check_fds(freerdp_listener* instance)
 
 		if (peer_sockfd == -1)
 		{
+			char buffer[8192] = { 0 };
 #ifdef _WIN32
 			int wsa_error = WSAGetLastError();
 
@@ -365,7 +371,7 @@ static BOOL freerdp_listener_check_fds(freerdp_listener* instance)
 				continue;
 
 #endif
-			WLog_DBG(TAG, "accept");
+			WLog_WARN(TAG, "accept failed with %s", winpr_strerror(errno, buffer, sizeof(buffer)));
 			freerdp_peer_free(client);
 			return FALSE;
 		}

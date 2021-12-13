@@ -30,6 +30,7 @@
 #include <freerdp/freerdp.h>
 #include <freerdp/constants.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/streamdump.h>
 #include <freerdp/utils/signal.h>
 
 #include <freerdp/client/file.h>
@@ -180,6 +181,11 @@ static BOOL tf_post_connect(freerdp* instance)
 	if (!gdi_init(instance, PIXEL_FORMAT_XRGB32))
 		return FALSE;
 
+	/* With this setting we disable all graphics processing in the library.
+	 *
+	 * This allows low resource (client) protocol parsing.
+	 */
+	freerdp_settings_set_bool(instance->settings, FreeRDP_DeactivateClientDecoding, TRUE);
 	instance->update->BeginPaint = tf_begin_paint;
 	instance->update->EndPaint = tf_end_paint;
 	instance->update->PlaySound = tf_play_sound;
@@ -384,6 +390,9 @@ int main(int argc, char* argv[])
 		                                                       argv);
 		goto fail;
 	}
+
+	if (!stream_dump_register_handlers(context, CONNECTION_STATE_MCS_CONNECT))
+		goto fail;
 
 	if (freerdp_client_start(context) != 0)
 		goto fail;

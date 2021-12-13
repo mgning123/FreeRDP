@@ -1,8 +1,9 @@
-/**
- * FreeRDP: A Remote Desktop Protocol Implementation
- * FreeRDP Proxy Server
+/*
+ * WinPR: Windows Portable Runtime
+ * Stream Utils
  *
- * Copyright 2019 Kobi Mizrachi <kmizrachi18@gmail.com>
+ * Copyright 2021 Armin Novak <anovak@thincast.com>
+ * Copyright 2021 Thincast Technologies GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,15 +18,11 @@
  * limitations under the License.
  */
 
-#ifndef FREERDP_SERVER_PROXY_RDPSND_H
-#define FREERDP_SERVER_PROXY_RDPSND_H
+#ifndef LIBWINPR_UTILS_STREAM_H
+#define LIBWINPR_UTILS_STREAM_H
 
-#include <freerdp/client/rdpsnd.h>
-#include <freerdp/server/rdpsnd.h>
+#include <winpr/stream.h>
 
-#include <freerdp/server/proxy/proxy_context.h>
+void Stream_EnsureValidity(wStream* s);
 
-BOOL pf_server_rdpsnd_init(pServerContext* ps);
-void pf_server_rdpsnd_free(pServerContext* ps);
-
-#endif /* FREERDP_SERVER_PROXY_RDPSND_H */
+#endif /* LIBWINPR_UTILS_STREAM_H */

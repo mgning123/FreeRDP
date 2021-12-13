@@ -38,13 +38,25 @@
 
 static BOOL freerdp_client_common_new(freerdp* instance, rdpContext* context)
 {
-	RDP_CLIENT_ENTRY_POINTS* pEntryPoints = instance->pClientEntryPoints;
+	RDP_CLIENT_ENTRY_POINTS* pEntryPoints;
+
+	WINPR_ASSERT(instance);
+	WINPR_ASSERT(context);
+
+	pEntryPoints = instance->pClientEntryPoints;
+	WINPR_ASSERT(pEntryPoints);
 	return IFCALLRESULT(TRUE, pEntryPoints->ClientNew, instance, context);
 }
 
 static void freerdp_client_common_free(freerdp* instance, rdpContext* context)
 {
-	RDP_CLIENT_ENTRY_POINTS* pEntryPoints = instance->pClientEntryPoints;
+	RDP_CLIENT_ENTRY_POINTS* pEntryPoints;
+
+	WINPR_ASSERT(instance);
+	WINPR_ASSERT(context);
+
+	pEntryPoints = instance->pClientEntryPoints;
+	WINPR_ASSERT(pEntryPoints);
 	IFCALL(pEntryPoints->ClientFree, instance, context);
 }
 
@@ -496,7 +508,7 @@ BOOL client_cli_gw_authenticate(freerdp* instance, char** username, char** passw
 
 static DWORD client_cli_accept_certificate(rdpSettings* settings)
 {
-	char answer;
+	int answer;
 
 	if (settings->CredentialsFromStdin)
 		return 0;
@@ -755,7 +767,7 @@ BOOL client_cli_present_gateway_message(freerdp* instance, UINT32 type, BOOL isD
                                         BOOL isConsentMandatory, size_t length,
                                         const WCHAR* message)
 {
-	char answer;
+	int answer;
 	const char* msgType = (type == GATEWAY_MESSAGE_CONSENT) ? "Consent message" : "Service message";
 
 	if (!isDisplayMandatory && !isConsentMandatory)

@@ -32,6 +32,7 @@
 #include <freerdp/client/cmdline.h>
 
 #include <freerdp/channels/urbdrc.h>
+#include <freerdp/channels/rdpecam.h>
 
 /**
  * Remote Desktop Plus - Overview of .rdp file settings:
@@ -897,6 +898,7 @@ BOOL freerdp_client_populate_rdp_file_from_settings(rdpFile* file, const rdpSett
 	UINT32 LoadBalanceInfoLength;
 	const char* GatewayHostname = NULL;
 	char* redirectCameras = NULL;
+	char* redirectUsb = NULL;
 
 	if (!FILE_POPULATE_STRING(&file->Domain, settings, FreeRDP_Domain) ||
 	    !FILE_POPULATE_STRING(&file->Username, settings, FreeRDP_Username) ||
@@ -1023,10 +1025,12 @@ BOOL freerdp_client_populate_rdp_file_from_settings(rdpFile* file, const rdpSett
 	    freerdp_settings_get_bool(settings, FreeRDP_AutoReconnectionEnabled);
 	file->RedirectSmartCards = freerdp_settings_get_bool(settings, FreeRDP_RedirectSmartCards);
 
-	redirectCameras = freerdp_client_channel_args_to_string(settings, "rdpecam", "device:");
+	redirectCameras =
+	    freerdp_client_channel_args_to_string(settings, RDPECAM_DVC_CHANNEL_NAME, "device:");
 	if (redirectCameras)
 	{
-		char* str = freerdp_client_channel_args_to_string(settings, "rdpecam", "encode:");
+		char* str =
+		    freerdp_client_channel_args_to_string(settings, RDPECAM_DVC_CHANNEL_NAME, "encode:");
 		file->EncodeRedirectedVideoCapture = 0;
 		if (str)
 		{
@@ -1038,7 +1042,7 @@ BOOL freerdp_client_populate_rdp_file_from_settings(rdpFile* file, const rdpSett
 		}
 		free(str);
 
-		str = freerdp_client_channel_args_to_string(settings, "rdpecam", "quality:");
+		str = freerdp_client_channel_args_to_string(settings, RDPECAM_DVC_CHANNEL_NAME, "quality:");
 		file->RedirectedVideoCaptureEncodingQuality = 0;
 		if (str)
 		{
@@ -1055,8 +1059,10 @@ BOOL freerdp_client_populate_rdp_file_from_settings(rdpFile* file, const rdpSett
 		file->RedirectCameras = redirectCameras;
 	}
 #ifdef CHANNEL_URBDRC_CLIENT
-	file->UsbDevicesToRedirect =
-	    freerdp_client_channel_args_to_string(settings, URBDRC_CHANNEL_NAME, "device:");
+	redirectUsb = freerdp_client_channel_args_to_string(settings, URBDRC_CHANNEL_NAME, "device:");
+	if (redirectUsb)
+		file->UsbDevicesToRedirect = redirectUsb;
+
 #endif
 	file->RedirectClipboard = freerdp_settings_get_bool(settings, FreeRDP_RedirectClipboard);
 	file->RedirectPrinters = freerdp_settings_get_bool(settings, FreeRDP_RedirectPrinters);
@@ -1993,8 +1999,13 @@ BOOL freerdp_client_populate_settings_from_rdp_file(rdpFile* file, rdpSettings* 
 
 	if (~((size_t)file->RedirectCameras))
 	{
+		union
+		{
+			char** c;
+			const char** cc;
+		} cnv;
 		BOOL status;
-		ADDIN_ARGV* args = rdp_file_to_args("rdpecam", file->RedirectCameras);
+		ADDIN_ARGV* args = rdp_file_to_args(RDPECAM_DVC_CHANNEL_NAME, file->RedirectCameras);
 		if (!args)
 			return FALSE;
 
@@ -2013,7 +2024,8 @@ BOOL freerdp_client_populate_settings_from_rdp_file(rdpFile* file, rdpSettings* 
 			freerdp_addin_argv_add_argument(args, quality);
 		}
 
-		status = freerdp_client_add_dynamic_channel(settings, args->argc, args->argv);
+		cnv.c = args->argv;
+		status = freerdp_client_add_dynamic_channel(settings, args->argc, cnv.cc);
 		freerdp_addin_argv_free(args);
 		/* Ignore return */ WINPR_UNUSED(status);
 	}
@@ -2021,11 +2033,17 @@ BOOL freerdp_client_populate_settings_from_rdp_file(rdpFile* file, rdpSettings* 
 #ifdef CHANNEL_URBDRC_CLIENT
 	if (~((size_t)file->UsbDevicesToRedirect))
 	{
+		union
+		{
+			char** c;
+			const char** cc;
+		} cnv;
 		BOOL status;
 		ADDIN_ARGV* args = rdp_file_to_args(URBDRC_CHANNEL_NAME, file->UsbDevicesToRedirect);
 		if (!args)
 			return FALSE;
-		status = freerdp_client_add_dynamic_channel(settings, args->argc, args->argv);
+		cnv.c = args->argv;
+		status = freerdp_client_add_dynamic_channel(settings, args->argc, cnv.cc);
 		freerdp_addin_argv_free(args);
 		/* Ignore return */ WINPR_UNUSED(status);
 	}

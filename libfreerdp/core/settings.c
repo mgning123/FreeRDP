@@ -78,7 +78,7 @@ static BOOL settings_reg_query_word_val(HKEY hKey, const TCHAR* sub, UINT16* val
 	if (!settings_reg_query_dword_val(hKey, sub, &dwValue))
 		return FALSE;
 
-	*value = dwValue;
+	*value = (UINT16)dwValue;
 	return TRUE;
 }
 
@@ -311,7 +311,10 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 	if (!settings)
 		return NULL;
 
-	if (!freerdp_settings_set_bool(settings, FreeRDP_HiDefRemoteApp, FALSE) ||
+	if (!freerdp_settings_set_bool(settings, FreeRDP_UnicodeInput, TRUE) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_HasHorizontalWheel, TRUE) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_HasExtendedMouseEvent, TRUE) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_HiDefRemoteApp, FALSE) ||
 	    !freerdp_settings_set_uint32(
 	        settings, FreeRDP_RemoteApplicationSupportMask,
 	        RAIL_LEVEL_SUPPORTED | RAIL_LEVEL_DOCKED_LANGBAR_SUPPORTED |
@@ -579,28 +582,6 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 	settings->ClientTimeZone = (LPTIME_ZONE_INFORMATION)calloc(1, sizeof(TIME_ZONE_INFORMATION));
 
 	if (!settings->ClientTimeZone)
-		goto out_fail;
-
-	freerdp_settings_set_uint32(settings, FreeRDP_DeviceArraySize, 16);
-	settings->DeviceArray = (RDPDR_DEVICE**)calloc(
-	    freerdp_settings_get_uint32(settings, FreeRDP_DeviceArraySize), sizeof(RDPDR_DEVICE*));
-
-	if (!settings->DeviceArray)
-		goto out_fail;
-
-	freerdp_settings_set_uint32(settings, FreeRDP_StaticChannelArraySize, 16);
-	settings->StaticChannelArray = (ADDIN_ARGV**)calloc(
-	    freerdp_settings_get_uint32(settings, FreeRDP_StaticChannelArraySize), sizeof(ADDIN_ARGV*));
-
-	if (!settings->StaticChannelArray)
-		goto out_fail;
-
-	freerdp_settings_set_uint32(settings, FreeRDP_DynamicChannelArraySize, 16);
-	settings->DynamicChannelArray =
-	    (ADDIN_ARGV**)calloc(freerdp_settings_get_uint32(settings, FreeRDP_DynamicChannelArraySize),
-	                         sizeof(ADDIN_ARGV*));
-
-	if (!settings->DynamicChannelArray)
 		goto out_fail;
 
 	if (!freerdp_settings_set_bool(settings, FreeRDP_TcpKeepAlive, TRUE) ||
@@ -1071,6 +1052,7 @@ BOOL freerdp_settings_copy(rdpSettings* _settings, const rdpSettings* settings)
 	_settings->LoadBalanceInfo = NULL;
 	_settings->ServerRandom = NULL;
 	_settings->ClientRandom = NULL;
+	_settings->ServerCertificate = NULL;
 	_settings->RdpServerCertificate = NULL;
 	_settings->RdpServerRsaKey = NULL;
 	_settings->ChannelDefArray = NULL;

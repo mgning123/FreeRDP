@@ -37,6 +37,11 @@
 
 #include "audin_main.h"
 
+/* fix missing definitions in mingw */
+#ifndef WAVE_MAPPED_DEFAULT_COMMUNICATION_DEVICE
+#define  WAVE_MAPPED_DEFAULT_COMMUNICATION_DEVICE   0x0010
+#endif
+
 typedef struct _AudinWinmmDevice
 {
 	IAudinDevice iface;
@@ -366,6 +371,9 @@ static BOOL audin_winmm_format_supported(IAudinDevice* device, const AUDIO_FORMA
 		return FALSE;
 
 	if (format->wFormatTag != WAVE_FORMAT_PCM)
+		return FALSE;
+
+	if (format->nChannels != 1)
 		return FALSE;
 
 	pwfx = (PWAVEFORMATEX)malloc(sizeof(WAVEFORMATEX) + format->cbSize);

@@ -360,6 +360,9 @@ BOOL rdp_set_error_info(rdpRdp* rdp, UINT32 errorInfo)
 		}
 		else
 			WLog_ERR(TAG, "%s missing context=%p", __FUNCTION__, context);
+
+		/* Ensure the connection is terminated */
+		freerdp_abort_connect(context->instance);
 	}
 	else
 	{
@@ -879,10 +882,10 @@ static BOOL rdp_recv_monitor_layout_pdu(rdpRdp* rdp, wStream* s)
 
 	for (monitor = monitorDefArray, index = 0; index < monitorCount; index++, monitor++)
 	{
-		Stream_Read_UINT32(s, monitor->left);   /* left (4 bytes) */
-		Stream_Read_UINT32(s, monitor->top);    /* top (4 bytes) */
-		Stream_Read_UINT32(s, monitor->right);  /* right (4 bytes) */
-		Stream_Read_UINT32(s, monitor->bottom); /* bottom (4 bytes) */
+		Stream_Read_INT32(s, monitor->left);    /* left (4 bytes) */
+		Stream_Read_INT32(s, monitor->top);     /* top (4 bytes) */
+		Stream_Read_INT32(s, monitor->right);   /* right (4 bytes) */
+		Stream_Read_INT32(s, monitor->bottom);  /* bottom (4 bytes) */
 		Stream_Read_UINT32(s, monitor->flags);  /* flags (4 bytes) */
 	}
 
@@ -1367,7 +1370,8 @@ static int rdp_recv_tpkt_pdu(rdpRdp* rdp, wStream* s)
 	{
 		while (Stream_GetRemainingLength(s) > 3)
 		{
-			wStream sub;
+			wStream subbuffer;
+			wStream* sub;
 			size_t diff;
 			UINT16 remain;
 
@@ -1377,7 +1381,7 @@ static int rdp_recv_tpkt_pdu(rdpRdp* rdp, wStream* s)
 				return -1;
 			}
 
-			Stream_StaticInit(&sub, Stream_Pointer(s), remain);
+			sub = Stream_StaticInit(&subbuffer, Stream_Pointer(s), remain);
 			if (!Stream_SafeSeek(s, remain))
 				return -1;
 
@@ -1387,13 +1391,13 @@ static int rdp_recv_tpkt_pdu(rdpRdp* rdp, wStream* s)
 			switch (pduType)
 			{
 				case PDU_TYPE_DATA:
-					rc = rdp_recv_data_pdu(rdp, &sub);
+					rc = rdp_recv_data_pdu(rdp, sub);
 					if (rc < 0)
 						return rc;
 					break;
 
 				case PDU_TYPE_DEACTIVATE_ALL:
-					if (!rdp_recv_deactivate_all(rdp, &sub))
+					if (!rdp_recv_deactivate_all(rdp, sub))
 					{
 						WLog_ERR(TAG, "rdp_recv_tpkt_pdu: rdp_recv_deactivate_all() fail");
 						return -1;
@@ -1402,14 +1406,14 @@ static int rdp_recv_tpkt_pdu(rdpRdp* rdp, wStream* s)
 					break;
 
 				case PDU_TYPE_SERVER_REDIRECTION:
-					return rdp_recv_enhanced_security_redirection_packet(rdp, &sub);
+					return rdp_recv_enhanced_security_redirection_packet(rdp, sub);
 
 				case PDU_TYPE_FLOW_RESPONSE:
 				case PDU_TYPE_FLOW_STOP:
 				case PDU_TYPE_FLOW_TEST:
 					WLog_DBG(TAG, "flow message 0x%04" PRIX16 "", pduType);
 					/* http://msdn.microsoft.com/en-us/library/cc240576.aspx */
-					if (!Stream_SafeSeek(&sub, remain))
+					if (!Stream_SafeSeek(sub, remain))
 						return -1;
 					break;
 
@@ -1418,7 +1422,7 @@ static int rdp_recv_tpkt_pdu(rdpRdp* rdp, wStream* s)
 					break;
 			}
 
-			diff = Stream_GetRemainingLength(&sub);
+			diff = Stream_GetRemainingLength(sub);
 			if (diff > 0)
 			{
 				WLog_WARN(TAG,
@@ -1780,7 +1784,6 @@ rdpRdp* rdp_new(rdpContext* context)
 {
 	rdpRdp* rdp;
 	DWORD flags;
-	BOOL newSettings = FALSE;
 	rdp = (rdpRdp*)calloc(1, sizeof(rdpRdp));
 
 	if (!rdp)
@@ -1800,8 +1803,6 @@ rdpRdp* rdp_new(rdpContext* context)
 
 		if (!context->settings)
 			goto fail;
-
-		newSettings = TRUE;
 	}
 
 	rdp->settings = context->settings;
@@ -1894,89 +1895,100 @@ fail:
 	return NULL;
 }
 
-BOOL rdp_reset(rdpRdp* rdp)
+static void rdp_reset_free(rdpRdp* rdp)
 {
-	rdpContext* context;
-	rdpSettings* settings;
-	context = rdp->context;
-	settings = rdp->settings;
-	bulk_reset(rdp->bulk);
+	WINPR_ASSERT(rdp);
+	winpr_RC4_Free(rdp->rc4_decrypt_key);
+	winpr_RC4_Free(rdp->rc4_encrypt_key);
+	winpr_Cipher_Free(rdp->fips_encrypt);
+	winpr_Cipher_Free(rdp->fips_decrypt);
 
-	if (rdp->rc4_decrypt_key)
-	{
-		winpr_RC4_Free(rdp->rc4_decrypt_key);
-		rdp->rc4_decrypt_key = NULL;
-	}
-
-	if (rdp->rc4_encrypt_key)
-	{
-		winpr_RC4_Free(rdp->rc4_encrypt_key);
-		rdp->rc4_encrypt_key = NULL;
-	}
-
-	if (rdp->fips_encrypt)
-	{
-		winpr_Cipher_Free(rdp->fips_encrypt);
-		rdp->fips_encrypt = NULL;
-	}
-
-	if (rdp->fips_decrypt)
-	{
-		winpr_Cipher_Free(rdp->fips_decrypt);
-		rdp->fips_decrypt = NULL;
-	}
-
-	if (settings->ServerRandom)
-	{
-		free(settings->ServerRandom);
-		settings->ServerRandom = NULL;
-		settings->ServerRandomLength = 0;
-	}
-
-	if (settings->ServerCertificate)
-	{
-		free(settings->ServerCertificate);
-		settings->ServerCertificate = NULL;
-	}
-
-	if (settings->ClientAddress)
-	{
-		free(settings->ClientAddress);
-		settings->ClientAddress = NULL;
-	}
+	rdp->rc4_decrypt_key = NULL;
+	rdp->rc4_encrypt_key = NULL;
+	rdp->fips_encrypt = NULL;
+	rdp->fips_decrypt = NULL;
 
 	mcs_free(rdp->mcs);
-	rdp->mcs = NULL;
-
 	nego_free(rdp->nego);
-	rdp->nego = NULL;
-
 	license_free(rdp->license);
-	rdp->license = NULL;
-
 	transport_free(rdp->transport);
-	rdp->transport = NULL;
-
 	fastpath_free(rdp->fastpath);
+
+	rdp->mcs = NULL;
+	rdp->nego = NULL;
+	rdp->license = NULL;
+	rdp->transport = NULL;
 	rdp->fastpath = NULL;
+}
 
+BOOL rdp_reset(rdpRdp* rdp)
+{
+	BOOL rc = TRUE;
+	rdpContext* context;
+	rdpSettings* settings;
+
+	WINPR_ASSERT(rdp);
+
+	context = rdp->context;
+	WINPR_ASSERT(context);
+
+	settings = rdp->settings;
+	WINPR_ASSERT(settings);
+
+	bulk_reset(rdp->bulk);
+
+	rdp_reset_free(rdp);
+
+	if (!freerdp_settings_set_pointer_len(settings, FreeRDP_ServerRandom, NULL, 0))
+		rc = FALSE;
+
+	if (!freerdp_settings_set_pointer_len(settings, FreeRDP_ServerCertificate, NULL, 0))
+		rc = FALSE;
+
+	if (!freerdp_settings_set_string(settings, FreeRDP_ClientAddress, NULL))
+		rc = FALSE;
+
+	if (!rc)
+		goto fail;
+
+	rc = FALSE;
 	rdp->transport = transport_new(context);
-	if (rdp->transport)
-	{
-		if (rdp->io)
-			transport_set_io_callbacks(rdp->transport, rdp->io);
+	if (!rdp->transport)
+		goto fail;
 
-		rdp->nego = nego_new(rdp->transport);
-		rdp->mcs = mcs_new(rdp->transport);
-		transport_set_layer(rdp->transport, TRANSPORT_LAYER_TCP);
+	if (rdp->io)
+	{
+		if (!transport_set_io_callbacks(rdp->transport, rdp->io))
+			goto fail;
 	}
+
+	rdp->nego = nego_new(rdp->transport);
+	if (!rdp->nego)
+		goto fail;
+
+	rdp->mcs = mcs_new(rdp->transport);
+	if (!rdp->mcs)
+		goto fail;
+
+	if (!transport_set_layer(rdp->transport, TRANSPORT_LAYER_TCP))
+		goto fail;
+
 	rdp->license = license_new(rdp);
+	if (!rdp->license)
+		goto fail;
+
 	rdp->fastpath = fastpath_new(rdp);
+	if (!rdp->fastpath)
+		goto fail;
+
 	rdp->errorInfo = 0;
 	rdp->deactivation_reactivation = 0;
 	rdp->finalize_sc_pdus = 0;
 
-	return rdp->transport && rdp->nego && rdp->mcs && rdp->fastpath && rdp->license;
+	rc = TRUE;
+
+fail:
+	return rc;
 }
 
 /**
@@ -1989,18 +2001,12 @@ void rdp_free(rdpRdp* rdp)
 	if (rdp)
 	{
 		DeleteCriticalSection(&rdp->critical);
-		winpr_RC4_Free(rdp->rc4_decrypt_key);
-		winpr_RC4_Free(rdp->rc4_encrypt_key);
-		winpr_Cipher_Free(rdp->fips_encrypt);
-		winpr_Cipher_Free(rdp->fips_decrypt);
+		rdp_reset_free(rdp);
+
 		freerdp_settings_free(rdp->settings);
-		transport_free(rdp->transport);
-		license_free(rdp->license);
+
 		input_free(rdp->input);
 		update_free(rdp->update);
-		fastpath_free(rdp->fastpath);
-		nego_free(rdp->nego);
-		mcs_free(rdp->mcs);
 		nla_free(rdp->nla);
 		redirection_free(rdp->redirection);
 		autodetect_free(rdp->autodetect);

@@ -1,6 +1,8 @@
 #ifndef FREERDP_CONFIG_H
 #define FREERDP_CONFIG_H
 
+#include <winpr/config.h>
+
 /* Include files */
 #if defined(__APPLE__) && !defined(__IOS__)
 #cmakedefine01 HAVE_UNISTD_H
@@ -22,6 +24,7 @@
 #cmakedefine AVRESAMPLE_FOUND
 
 /* Options */
+#cmakedefine WITH_ADD_PLUGIN_TO_RPATH
 #cmakedefine WITH_PROFILER
 #cmakedefine WITH_GPROF
 #cmakedefine WITH_SSE2
@@ -51,11 +54,13 @@
 #cmakedefine WITH_FFMPEG
 #cmakedefine WITH_DSP_EXPERIMENTAL
 #cmakedefine WITH_DSP_FFMPEG
-#cmakedefine WITH_X264
 #cmakedefine WITH_OPENCL
 #cmakedefine WITH_MEDIA_FOUNDATION
 
 #cmakedefine WITH_VAAPI
+
+#cmakedefine WITH_CHANNEL_GFXREDIR
+#cmakedefine WITH_CHANNEL_RDPAPPLIST
 
 /* Plugins */
 #cmakedefine BUILTIN_CHANNELS
@@ -83,6 +88,9 @@
 #cmakedefine CHANNEL_ENCOMSP
 #cmakedefine CHANNEL_ENCOMSP_CLIENT
 #cmakedefine CHANNEL_ENCOMSP_SERVER
+#cmakedefine CHANNEL_GFXREDIR
+#cmakedefine CHANNEL_GFXREDIR_CLIENT
+#cmakedefine CHANNEL_GFXREDIR_SERVER
 #cmakedefine CHANNEL_PARALLEL
 #cmakedefine CHANNEL_PARALLEL_CLIENT
 #cmakedefine CHANNEL_PARALLEL_SERVER
@@ -92,6 +100,9 @@
 #cmakedefine CHANNEL_RAIL
 #cmakedefine CHANNEL_RAIL_CLIENT
 #cmakedefine CHANNEL_RAIL_SERVER
+#cmakedefine CHANNEL_RDPAPPLIST
+#cmakedefine CHANNEL_RDPAPPLIST_CLIENT
+#cmakedefine CHANNEL_RDPAPPLIST_SERVER
 #cmakedefine CHANNEL_RDPDR
 #cmakedefine CHANNEL_RDPDR_CLIENT
 #cmakedefine CHANNEL_RDPDR_SERVER

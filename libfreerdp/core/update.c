@@ -99,6 +99,13 @@ static BOOL update_read_bitmap_data(rdpUpdate* update, wStream* s, BITMAP_DATA* 
 	Stream_Read_UINT16(s, bitmapData->flags);
 	Stream_Read_UINT16(s, bitmapData->bitmapLength);
 
+	if ((bitmapData->width == 0) || (bitmapData->height == 0))
+	{
+		WLog_ERR(TAG, "Invalid BITMAP_DATA: width=%" PRIu16 ", height=%" PRIu16, bitmapData->width,
+		         bitmapData->height);
+		return FALSE;
+	}
+
 	if (bitmapData->flags & BITMAP_COMPRESSION)
 	{
 		if (!(bitmapData->flags & NO_BITMAP_COMPRESSION_HDR))
@@ -272,7 +279,7 @@ PALETTE_UPDATE* update_read_palette(rdpUpdate* update, wStream* s)
 	if (palette_update->number > 256)
 		palette_update->number = 256;
 
-	if (Stream_GetRemainingLength(s) < palette_update->number * 3)
+	if (Stream_GetRemainingLength(s) / 3 < palette_update->number)
 		goto fail;
 
 	/* paletteEntries */
@@ -924,6 +931,7 @@ static BOOL _update_begin_paint(rdpContext* context)
 		return FALSE;
 
 	Stream_SealLength(s);
+	Stream_GetLength(s, update->offsetOrders);
 	Stream_Seek(s, 2); /* numberOrders (2 bytes) */
 	update->combineUpdates = TRUE;
 	update->numberOrders = 0;
@@ -934,16 +942,14 @@ static BOOL _update_begin_paint(rdpContext* context)
 static BOOL _update_end_paint(rdpContext* context)
 {
 	wStream* s;
-	int headerLength;
 	rdpUpdate* update = context->update;
 
 	if (!update->us)
 		return FALSE;
 
 	s = update->us;
-	headerLength = Stream_Length(s);
 	Stream_SealLength(s);
-	Stream_SetPosition(s, headerLength);
+	Stream_SetPosition(s, update->offsetOrders);
 	Stream_Write_UINT16(s, update->numberOrders); /* numberOrders (2 bytes) */
 	Stream_SetPosition(s, Stream_Length(s));
 
@@ -955,6 +961,7 @@ static BOOL _update_end_paint(rdpContext* context)
 
 	update->combineUpdates = FALSE;
 	update->numberOrders = 0;
+	update->offsetOrders = 0;
 	update->us = NULL;
 	Stream_Free(s, TRUE);
 	return TRUE;
@@ -2122,7 +2129,7 @@ BOOL update_read_refresh_rect(rdpUpdate* update, wStream* s)
 	Stream_Read_UINT8(s, numberOfAreas);
 	Stream_Seek(s, 3); /* pad3Octects */
 
-	if (Stream_GetRemainingLength(s) < ((size_t)numberOfAreas * 4 * 2))
+	if (Stream_GetRemainingLength(s) / 8 < numberOfAreas)
 		return FALSE;
 
 	areas = (RECTANGLE_16*)calloc(numberOfAreas, sizeof(RECTANGLE_16));
@@ -2991,12 +2998,21 @@ void update_free(rdpUpdate* update)
 	}
 }
 
+void update_lock(rdpUpdate* update)
+{
+	WINPR_ASSERT(update);
+	EnterCriticalSection(&update->mux);
+}
+
+void update_unlock(rdpUpdate* update)
+{
+	WINPR_ASSERT(update);
+	LeaveCriticalSection(&update->mux);
+}
+
 BOOL update_begin_paint(rdpUpdate* update)
 {
-	if (!update)
-		return FALSE;
-
-	EnterCriticalSection(&update->mux);
+	update_lock(update);
 
 	if (!update->BeginPaint)
 		return TRUE;
@@ -3014,6 +3030,6 @@ BOOL update_end_paint(rdpUpdate* update)
 	if (update->EndPaint)
 		rc = update->EndPaint(update->context);
 
-	LeaveCriticalSection(&update->mux);
+	update_unlock(update);
 	return rc;
 }

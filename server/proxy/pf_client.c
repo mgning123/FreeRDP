@@ -33,10 +33,10 @@
 #include <freerdp/channels/drdynvc.h>
 #include <freerdp/channels/encomsp.h>
 #include <freerdp/channels/rdpdr.h>
+#include <freerdp/channels/rdpsnd.h>
+#include <freerdp/channels/cliprdr.h>
+#include <freerdp/channels/channels.h>
 
-#include "pf_channels.h"
-#include "pf_gdi.h"
-#include "pf_graphics.h"
 #include "pf_client.h"
 #include <freerdp/server/proxy/proxy_context.h>
 #include "pf_update.h"
@@ -47,6 +47,7 @@
 
 #define TAG PROXY_TAG("client")
 
+static void channel_data_free(void* obj);
 static BOOL proxy_server_reactivate(rdpContext* ps, const rdpContext* pc)
 {
 	WINPR_ASSERT(ps);
@@ -129,8 +130,7 @@ static BOOL pf_client_load_rdpsnd(pClientContext* pc)
 	 */
 	if (!freerdp_static_channel_collection_find(context->settings, RDPSND_CHANNEL_NAME))
 	{
-		char* params[2];
-		params[0] = RDPSND_CHANNEL_NAME;
+		const char* params[2] = { RDPSND_CHANNEL_NAME };
 
 		if (config->AudioOutput &&
 		    WTSVirtualChannelManagerIsChannelJoined(ps->vcm, RDPSND_CHANNEL_NAME))
@@ -138,7 +138,7 @@ static BOOL pf_client_load_rdpsnd(pClientContext* pc)
 		else
 			params[1] = "sys:fake";
 
-		if (!freerdp_client_add_static_channel(context->settings, 2, (char**)params))
+		if (!freerdp_client_add_static_channel(context->settings, ARRAYSIZE(params), params))
 			return FALSE;
 	}
 
@@ -211,9 +211,27 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 	settings->UseMultimon = TRUE;
 
 	/* Sound */
-	settings->AudioPlayback = config->AudioOutput;
-	if (WTSVirtualChannelManagerIsChannelJoined(ps->vcm, "rdpdr"))
-		settings->DeviceRedirection = TRUE;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_AudioCapture, config->AudioInput) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_AudioPlayback, config->AudioOutput) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_DeviceRedirection,
+	                               config->DeviceRedirection) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl,
+	                               config->DisplayControl) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_RemoteAssistanceMode, config->RemoteApp) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_MultiTouchInput, config->Multitouch))
+		return FALSE;
+
+	if (config->RemoteApp)
+	{
+		if (WTSVirtualChannelManagerIsChannelJoined(ps->vcm, RAIL_SVC_CHANNEL_NAME))
+			settings->RemoteApplicationMode = TRUE;
+	}
+
+	if (config->DeviceRedirection)
+	{
+		if (WTSVirtualChannelManagerIsChannelJoined(ps->vcm, RDPDR_SVC_CHANNEL_NAME))
+			settings->DeviceRedirection = TRUE;
+	}
 
 	/* Display control */
 	settings->SupportDisplayControl = config->DisplayControl;
@@ -222,19 +240,14 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 	if (WTSVirtualChannelManagerIsChannelJoined(ps->vcm, ENCOMSP_SVC_CHANNEL_NAME))
 		settings->EncomspVirtualChannel = TRUE;
 
-	if (WTSVirtualChannelManagerIsChannelJoined(ps->vcm, CLIPRDR_SVC_CHANNEL_NAME))
-		settings->RedirectClipboard = config->Clipboard;
+	if (config->Clipboard)
+	{
+		if (WTSVirtualChannelManagerIsChannelJoined(ps->vcm, CLIPRDR_SVC_CHANNEL_NAME))
+			settings->RedirectClipboard = config->Clipboard;
+	}
 
 	settings->AutoReconnectionEnabled = TRUE;
 
-	/**
-	 * Register the channel listeners.
-	 * They are required to set up / tear down channels if they are loaded.
-	 */
-	PubSub_SubscribeChannelConnected(instance->context->pubSub,
-	                                 pf_channels_on_client_channel_connect);
-	PubSub_SubscribeChannelDisconnected(instance->context->pubSub,
-	                                    pf_channels_on_client_channel_disconnect);
 	PubSub_SubscribeErrorInfo(instance->context->pubSub, pf_client_on_error_info);
 	PubSub_SubscribeActivated(instance->context->pubSub, pf_client_on_activated);
 	/**
@@ -252,12 +265,53 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 		return FALSE;
 	}
 
-	if (!freerdp_client_load_addins(instance->context->channels, instance->settings))
+	if (!pf_utils_is_passthrough(config))
 	{
-		PROXY_LOG_ERR(TAG, pc, "Failed to load addins");
-		return FALSE;
+		if (!freerdp_client_load_addins(instance->context->channels, instance->settings))
+		{
+			PROXY_LOG_ERR(TAG, pc, "Failed to load addins");
+			return FALSE;
+		}
 	}
+	else
+	{
+		/* Copy the current channel settings from the peer connection to the client. */
+		if (!freerdp_channels_from_mcs(settings, &ps->context))
+			return FALSE;
 
+		/* Filter out channels we do not want */
+		{
+			CHANNEL_DEF* channels = (CHANNEL_DEF*)freerdp_settings_get_pointer_array_writable(
+			    settings, FreeRDP_ChannelDefArray, 0);
+			size_t x, size = freerdp_settings_get_uint32(settings, FreeRDP_ChannelCount);
+
+			WINPR_ASSERT(channels || (size == 0));
+
+			for (x = 0; x < size;)
+			{
+				CHANNEL_DEF* cur = &channels[x];
+				proxyChannelDataEventInfo dev = { 0 };
+
+				dev.channel_name = cur->name;
+				dev.flags = cur->options;
+
+				/* Filter out channels blocked by config */
+				if (!pf_modules_run_filter(pc->pdata->module,
+				                           FILTER_TYPE_CLIENT_PASSTHROUGH_CHANNEL_CREATE, pc->pdata,
+				                           &dev))
+				{
+					const size_t s = size - MIN(size, x + 1);
+					memmove(cur, &cur[1], sizeof(CHANNEL_DEF) * s);
+					size--;
+				}
+				else
+					x++;
+			}
+
+			if (!freerdp_settings_set_uint32(settings, FreeRDP_ChannelCount, x))
+				return FALSE;
+		}
+	}
 	return pf_modules_run_hook(pc->pdata->module, HOOK_TYPE_CLIENT_PRE_CONNECT, pc->pdata, pc);
 }
 
@@ -324,13 +378,13 @@ static BOOL pf_client_receive_channel_data_hook(freerdp* instance, UINT16 channe
 			    (strncmp(channel_name, DRDYNVC_SVC_CHANNEL_NAME, CHANNEL_NAME_LEN + 1) == 0))
 			{
 				BYTE cmd, first;
-				wStream s;
+				wStream *s, sbuffer;
 
-				Stream_StaticInit(&s, xdata, xsize);
-				if (Stream_Length(&s) < 1)
+				s = Stream_StaticConstInit(&sbuffer, xdata, xsize);
+				if (Stream_Length(s) < 1)
 					return FALSE;
 
-				Stream_Read_UINT8(&s, first);
+				Stream_Read_UINT8(s, first);
 				cmd = first >> 4;
 
 				if (cmd == CREATE_REQUEST_PDU)
@@ -343,26 +397,26 @@ static BOOL pf_client_receive_channel_data_hook(freerdp* instance, UINT16 channe
 					switch (cbId)
 					{
 						case 0x00:
-							if (Stream_GetRemainingLength(&s) < 1)
+							if (Stream_GetRemainingLength(s) < 1)
 								return FALSE;
-							Stream_Read_UINT8(&s, dynChannelId);
+							Stream_Read_UINT8(s, dynChannelId);
 							break;
 						case 0x01:
-							if (Stream_GetRemainingLength(&s) < 2)
+							if (Stream_GetRemainingLength(s) < 2)
 								return FALSE;
-							Stream_Read_UINT16(&s, dynChannelId);
+							Stream_Read_UINT16(s, dynChannelId);
 							break;
 						case 0x02:
-							if (Stream_GetRemainingLength(&s) < 4)
+							if (Stream_GetRemainingLength(s) < 4)
 								return FALSE;
-							Stream_Read_UINT32(&s, dynChannelId);
+							Stream_Read_UINT32(s, dynChannelId);
 							break;
 						default:
 							return FALSE;
 					}
 
-					name = (const char*)Stream_Pointer(&s);
-					nameLen = Stream_GetRemainingLength(&s);
+					name = (const char*)Stream_Pointer(s);
+					nameLen = Stream_GetRemainingLength(s);
 					len = strnlen(name, nameLen);
 					if ((len == 0) || (len == nameLen))
 						return FALSE;
@@ -416,35 +470,42 @@ static BOOL pf_client_send_channel_data(pClientContext* pc, const proxyChannelDa
 	WINPR_ASSERT(pc);
 	WINPR_ASSERT(ev);
 
-	if (!pc->connected)
-	{
-		ArrayList_Append(pc->cached_server_channel_data, ev);
-		return TRUE;
-	}
-	else
-	{
-		UINT16 channelId;
-		WINPR_ASSERT(pc->context.instance);
-
-		channelId = freerdp_channels_get_id_by_name(pc->context.instance, ev->channel_name);
-		/* Ignore unmappable channels */
-		if ((channelId == 0) || (channelId == UINT16_MAX))
-			return TRUE;
-		WINPR_ASSERT(pc->context.instance->SendChannelPacket);
-		return pc->context.instance->SendChannelPacket(
-		    pc->context.instance, channelId, ev->total_size, ev->flags, ev->data, ev->data_len);
-	}
+	return Queue_Enqueue(pc->cached_server_channel_data, ev);
 }
-
-static BOOL send_channel_data(void* data, size_t index, va_list ap)
+static BOOL sendQueuedChannelData(pClientContext* pc)
 {
-	pClientContext* pc = va_arg(ap, pClientContext*);
-	proxyChannelDataEventInfo* ev = data;
-	WINPR_ASSERT(ev);
-	WINPR_ASSERT(pc);
-	WINPR_UNUSED(index);
+	BOOL rc = TRUE;
 
-	return pf_client_send_channel_data(pc, ev);
+	WINPR_ASSERT(pc);
+
+	if (pc->connected)
+	{
+		proxyChannelDataEventInfo* ev;
+
+		Queue_Lock(pc->cached_server_channel_data);
+		while (rc && (ev = Queue_Dequeue(pc->cached_server_channel_data)))
+		{
+			UINT16 channelId;
+			WINPR_ASSERT(pc->context.instance);
+
+			channelId = freerdp_channels_get_id_by_name(pc->context.instance, ev->channel_name);
+			/* Ignore unmappable channels */
+			if ((channelId == 0) || (channelId == UINT16_MAX))
+				rc = TRUE;
+			else
+			{
+				WINPR_ASSERT(pc->context.instance->SendChannelPacket);
+				rc = pc->context.instance->SendChannelPacket(pc->context.instance, channelId,
+				                                             ev->total_size, ev->flags, ev->data,
+				                                             ev->data_len);
+			}
+			channel_data_free(ev);
+		}
+
+		Queue_Unlock(pc->cached_server_channel_data);
+	}
+
+	return rc;
 }
 
 /**
@@ -486,24 +547,7 @@ static BOOL pf_client_post_connect(freerdp* instance)
 	if (!gdi_init(instance, PIXEL_FORMAT_BGRA32))
 		return FALSE;
 
-	if (!pf_register_pointer(context->graphics))
-		return FALSE;
-
-	if (!settings->SoftwareGdi)
-	{
-		if (!pf_register_graphics(context->graphics))
-		{
-			PROXY_LOG_ERR(TAG, pc, "failed to register graphics");
-			return FALSE;
-		}
-
-		pf_gdi_register_update_callbacks(update);
-		brush_cache_register_callbacks(update);
-		glyph_cache_register_callbacks(update);
-		bitmap_cache_register_callbacks(update);
-		offscreen_cache_register_callbacks(update);
-		palette_cache_register_callbacks(update);
-	}
+	WINPR_ASSERT(settings->SoftwareGdi);
 
 	pf_client_register_update_callbacks(update);
 
@@ -516,10 +560,7 @@ static BOOL pf_client_post_connect(freerdp* instance)
 	pc->connected = TRUE;
 
 	/* Send cached channel data */
-	ArrayList_Lock(pc->cached_server_channel_data);
-	ArrayList_ForEach(pc->cached_server_channel_data, send_channel_data, pc);
-	ArrayList_Clear(pc->cached_server_channel_data);
-	ArrayList_Unlock(pc->cached_server_channel_data);
+	sendQueuedChannelData(pc);
 
 	/*
 	 * after the connection fully established and settings were negotiated with target server,
@@ -551,10 +592,6 @@ static void pf_client_post_disconnect(freerdp* instance)
 	pc->connected = FALSE;
 	pf_modules_run_hook(pc->pdata->module, HOOK_TYPE_CLIENT_POST_CONNECT, pc->pdata, pc);
 
-	PubSub_UnsubscribeChannelConnected(instance->context->pubSub,
-	                                   pf_channels_on_client_channel_connect);
-	PubSub_UnsubscribeChannelDisconnected(instance->context->pubSub,
-	                                      pf_channels_on_client_channel_disconnect);
 	PubSub_UnsubscribeErrorInfo(instance->context->pubSub, pf_client_on_error_info);
 	gdi_free(instance);
 
@@ -630,7 +667,7 @@ static BOOL pf_client_connect_without_nla(pClientContext* pc)
 
 	/* do not allow next connection failure */
 	pc->allow_next_conn_failure = FALSE;
-	return freerdp_connect(instance);
+	return freerdp_reconnect(instance);
 }
 
 static BOOL pf_client_connect(freerdp* instance)
@@ -658,12 +695,12 @@ static BOOL pf_client_connect(freerdp* instance)
 
 	if (!freerdp_connect(instance))
 	{
+		pf_modules_run_hook(pc->pdata->module, HOOK_TYPE_CLIENT_LOGIN_FAILURE, pc->pdata, pc);
+
 		if (!retry)
 			goto out;
 
 		PROXY_LOG_ERR(TAG, pc, "failed to connect with NLA. retrying to connect without NLA");
-		pf_modules_run_hook(pc->pdata->module, HOOK_TYPE_CLIENT_LOGIN_FAILURE, pc->pdata, pc);
-
 		if (!pf_client_connect_without_nla(pc))
 		{
 			PROXY_LOG_ERR(TAG, pc, "pf_client_connect_without_nla failed!");
@@ -717,6 +754,7 @@ static DWORD WINAPI pf_client_thread_proc(pClientContext* pc)
 		proxy_data_abort_connect(pdata);
 		return FALSE;
 	}
+	handles[nCount++] = Queue_Event(pc->cached_server_channel_data);
 
 	while (!freerdp_shall_disconnect(instance))
 	{
@@ -755,6 +793,7 @@ static DWORD WINAPI pf_client_thread_proc(pClientContext* pc)
 
 			break;
 		}
+		sendQueuedChannelData(pc);
 	}
 
 	freerdp_disconnect(instance);
@@ -785,7 +824,7 @@ static void pf_client_context_free(freerdp* instance, rdpContext* context)
 		return;
 
 	pc->sendChannelData = NULL;
-	ArrayList_Free(pc->cached_server_channel_data);
+	Queue_Free(pc->cached_server_channel_data);
 	Stream_Free(pc->remote_pem, TRUE);
 	free(pc->remote_hostname);
 }
@@ -824,7 +863,7 @@ static int pf_client_verify_X509_certificate(freerdp* instance, const BYTE* data
 	return 1;
 }
 
-static void channel_data_free(void* obj)
+void channel_data_free(void* obj)
 {
 	proxyChannelDataEventInfo* dst = obj;
 	if (dst)
@@ -883,10 +922,10 @@ static BOOL pf_client_client_new(freerdp* instance, rdpContext* context)
 		return FALSE;
 
 	pc->sendChannelData = pf_client_send_channel_data;
-	pc->cached_server_channel_data = ArrayList_New(TRUE);
+	pc->cached_server_channel_data = Queue_New(TRUE, -1, -1);
 	if (!pc->cached_server_channel_data)
 		return FALSE;
-	obj = ArrayList_Object(pc->cached_server_channel_data);
+	obj = Queue_Object(pc->cached_server_channel_data);
 	WINPR_ASSERT(obj);
 	obj->fnObjectNew = channel_data_copy;
 	obj->fnObjectFree = channel_data_free;

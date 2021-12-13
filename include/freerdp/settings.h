@@ -452,9 +452,7 @@ typedef struct _RDPDR_DEVICE RDPDR_DEVICE;
 
 struct _RDPDR_DRIVE
 {
-	UINT32 Id;
-	UINT32 Type;
-	char* Name;
+	RDPDR_DEVICE device;
 	char* Path;
 	BOOL automount;
 };
@@ -462,26 +460,20 @@ typedef struct _RDPDR_DRIVE RDPDR_DRIVE;
 
 struct _RDPDR_PRINTER
 {
-	UINT32 Id;
-	UINT32 Type;
-	char* Name;
+	RDPDR_DEVICE device;
 	char* DriverName;
 };
 typedef struct _RDPDR_PRINTER RDPDR_PRINTER;
 
 struct _RDPDR_SMARTCARD
 {
-	UINT32 Id;
-	UINT32 Type;
-	char* Name;
+	RDPDR_DEVICE device;
 };
 typedef struct _RDPDR_SMARTCARD RDPDR_SMARTCARD;
 
 struct _RDPDR_SERIAL
 {
-	UINT32 Id;
-	UINT32 Type;
-	char* Name;
+	RDPDR_DEVICE device;
 	char* Path;
 	char* Driver;
 	char* Permissive;
@@ -490,9 +482,7 @@ typedef struct _RDPDR_SERIAL RDPDR_SERIAL;
 
 struct _RDPDR_PARALLEL
 {
-	UINT32 Id;
-	UINT32 Type;
-	char* Name;
+	RDPDR_DEVICE device;
 	char* Path;
 };
 typedef struct _RDPDR_PARALLEL RDPDR_PARALLEL;
@@ -741,6 +731,10 @@ typedef struct _RDPDR_PARALLEL RDPDR_PARALLEL;
 #define FreeRDP_PlayRemoteFx (1857)
 #define FreeRDP_DumpRemoteFxFile (1858)
 #define FreeRDP_PlayRemoteFxFile (1859)
+#define FreeRDP_TransportDump (1860)
+#define FreeRDP_TransportDumpFile (1861)
+#define FreeRDP_TransportDumpReplay (1862)
+#define FreeRDP_DeactivateClientDecoding (1863)
 #define FreeRDP_GatewayUsageMethod (1984)
 #define FreeRDP_GatewayPort (1985)
 #define FreeRDP_GatewayHostname (1986)
@@ -1246,7 +1240,11 @@ struct rdp_settings
 	ALIGN64 BOOL PlayRemoteFx;       /* 1857 */
 	ALIGN64 char* DumpRemoteFxFile;  /* 1858 */
 	ALIGN64 char* PlayRemoteFxFile;  /* 1859 */
-	UINT64 padding1920[1920 - 1860]; /* 1860 */
+	ALIGN64 BOOL TransportDump;      /* 1860 */
+	ALIGN64 char* TransportDumpFile; /* 1861 */
+	ALIGN64 BOOL TransportDumpReplay;      /* 1862 */
+	ALIGN64 BOOL DeactivateClientDecoding; /* 1863 */
+	UINT64 padding1920[1920 - 1864];       /* 1864 */
 	UINT64 padding1984[1984 - 1920]; /* 1920 */
 
 	/**
@@ -1645,7 +1643,11 @@ extern "C"
 	                                                         const char* name);
 	FREERDP_API RDPDR_DEVICE* freerdp_device_collection_find_type(rdpSettings* settings,
 	                                                              UINT32 type);
-	FREERDP_API RDPDR_DEVICE* freerdp_device_clone(RDPDR_DEVICE* device);
+
+	FREERDP_API RDPDR_DEVICE* freerdp_device_new(UINT32 Type, size_t count, const char* args[]);
+	FREERDP_API RDPDR_DEVICE* freerdp_device_clone(const RDPDR_DEVICE* device);
+	FREERDP_API void freerdp_device_free(RDPDR_DEVICE* device);
+
 	FREERDP_API void freerdp_device_collection_free(rdpSettings* settings);
 
 	FREERDP_API BOOL freerdp_static_channel_collection_add(rdpSettings* settings,
